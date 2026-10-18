@@ -574,125 +574,67 @@ class PortalSession:
 
     # --- RemoteDesktop Input Notification Primitives ---
 
-    def notify_pointer_motion_absolute(self, x: float, y: float) -> None:
-        """Send NotifyPointerMotionAbsolute for the active Target Display stream."""
-        info = self.session_info
+    def _call_remote_desktop_notify(
+        self, method_name: str, variant_type: str, payload: tuple[Any, ...]
+    ) -> None:
+        """Invoke a synchronous RemoteDesktop input notification method."""
         conn = self._ensure_connection()
         try:
             conn.call_sync(
                 PORTAL_BUS_NAME,
                 PORTAL_OBJECT_PATH,
                 REMOTE_DESKTOP_IFACE,
-                "NotifyPointerMotionAbsolute",
-                GLib.Variant(
-                    "(oa{sv}udd)",
-                    (
-                        info.session_handle,
-                        {},
-                        int(info.target_display.node_id),
-                        float(x),
-                        float(y),
-                    ),
-                ),
+                method_name,
+                GLib.Variant(variant_type, payload),
                 None,
                 Gio.DBusCallFlags.NONE,
                 -1,
                 None,
             )
         except GLib.Error as exc:
-            raise PortalError(
-                f"NotifyPointerMotionAbsolute failed: {exc.message}"
-            ) from exc
+            raise PortalError(f"{method_name} failed: {exc.message}") from exc
+
+    def notify_pointer_motion_absolute(self, x: float, y: float) -> None:
+        """Send NotifyPointerMotionAbsolute for the active Target Display stream."""
+        info = self.session_info
+        self._call_remote_desktop_notify(
+            "NotifyPointerMotionAbsolute",
+            "(oa{sv}udd)",
+            (
+                info.session_handle,
+                {},
+                int(info.target_display.node_id),
+                float(x),
+                float(y),
+            ),
+        )
 
     def notify_pointer_button(self, button: int, pressed: bool) -> None:
         """Send NotifyPointerButton (evdev button code, state: 1=pressed, 0=released)."""
         info = self.session_info
-        conn = self._ensure_connection()
         state = 1 if pressed else 0
-        try:
-            conn.call_sync(
-                PORTAL_BUS_NAME,
-                PORTAL_OBJECT_PATH,
-                REMOTE_DESKTOP_IFACE,
-                "NotifyPointerButton",
-                GLib.Variant(
-                    "(oa{sv}iu)",
-                    (info.session_handle, {}, int(button), int(state)),
-                ),
-                None,
-                Gio.DBusCallFlags.NONE,
-                -1,
-                None,
-            )
-        except GLib.Error as exc:
-            raise PortalError(f"NotifyPointerButton failed: {exc.message}") from exc
+        self._call_remote_desktop_notify(
+            "NotifyPointerButton",
+            "(oa{sv}iu)",
+            (info.session_handle, {}, int(button), int(state)),
+        )
 
     def notify_pointer_axis_discrete(self, axis: int, steps: int) -> None:
         """Send NotifyPointerAxisDiscrete (axis: 0=vertical, 1=horizontal)."""
         info = self.session_info
-        conn = self._ensure_connection()
-        try:
-            conn.call_sync(
-                PORTAL_BUS_NAME,
-                PORTAL_OBJECT_PATH,
-                REMOTE_DESKTOP_IFACE,
-                "NotifyPointerAxisDiscrete",
-                GLib.Variant(
-                    "(oa{sv}ui)",
-                    (info.session_handle, {}, int(axis), int(steps)),
-                ),
-                None,
-                Gio.DBusCallFlags.NONE,
-                -1,
-                None,
-            )
-        except GLib.Error as exc:
-            raise PortalError(
-                f"NotifyPointerAxisDiscrete failed: {exc.message}"
-            ) from exc
-
-    def notify_pointer_axis(self, dx: float, dy: float, finish: bool = True) -> None:
-        """Send NotifyPointerAxis smooth scroll event."""
-        info = self.session_info
-        conn = self._ensure_connection()
-        opts = {"finish": GLib.Variant("b", bool(finish))}
-        try:
-            conn.call_sync(
-                PORTAL_BUS_NAME,
-                PORTAL_OBJECT_PATH,
-                REMOTE_DESKTOP_IFACE,
-                "NotifyPointerAxis",
-                GLib.Variant(
-                    "(oa{sv}dd)",
-                    (info.session_handle, opts, float(dx), float(dy)),
-                ),
-                None,
-                Gio.DBusCallFlags.NONE,
-                -1,
-                None,
-            )
-        except GLib.Error as exc:
-            raise PortalError(f"NotifyPointerAxis failed: {exc.message}") from exc
+        self._call_remote_desktop_notify(
+            "NotifyPointerAxisDiscrete",
+            "(oa{sv}ui)",
+            (info.session_handle, {}, int(axis), int(steps)),
+        )
 
     def notify_keyboard_keysym(self, keysym: int, pressed: bool) -> None:
         """Send NotifyKeyboardKeysym (X11 keysym, state: 1=pressed, 0=released)."""
         info = self.session_info
-        conn = self._ensure_connection()
         state = 1 if pressed else 0
-        try:
-            conn.call_sync(
-                PORTAL_BUS_NAME,
-                PORTAL_OBJECT_PATH,
-                REMOTE_DESKTOP_IFACE,
-                "NotifyKeyboardKeysym",
-                GLib.Variant(
-                    "(oa{sv}iu)",
-                    (info.session_handle, {}, int(keysym), int(state)),
-                ),
-                None,
-                Gio.DBusCallFlags.NONE,
-                -1,
-                None,
-            )
-        except GLib.Error as exc:
-            raise PortalError(f"NotifyKeyboardKeysym failed: {exc.message}") from exc
+        self._call_remote_desktop_notify(
+            "NotifyKeyboardKeysym",
+            "(oa{sv}iu)",
+            (info.session_handle, {}, int(keysym), int(state)),
+        )
+

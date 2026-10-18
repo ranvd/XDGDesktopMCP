@@ -267,3 +267,14 @@ class TestKeysymSynthesizerAndSafety:
             ("key", ord("i"), False),
         ]
 
+        # Verify Shift is tracked in active_modifiers and released if char press fails
+        fail_backend = FakeInputBackend(fail_on_keysym=ord("H"))
+        fail_synth = KeysymSynthesizer(fail_backend, key_delay=0)
+        with pytest.raises(RuntimeError, match="Simulated D-Bus failure"):
+            fail_synth.type_text_keysyms("Hi")
+        assert fail_synth.active_modifiers == ()
+        assert fail_backend.events == [
+            ("key", XK_SHIFT_L, True),
+            ("key", XK_SHIFT_L, False),
+        ]
+

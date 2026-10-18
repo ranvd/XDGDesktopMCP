@@ -135,7 +135,6 @@ class InputBackend(Protocol):
     def notify_pointer_motion_absolute(self, x: float, y: float) -> None: ...
     def notify_pointer_button(self, button: int, pressed: bool) -> None: ...
     def notify_pointer_axis_discrete(self, axis: int, steps: int) -> None: ...
-    def notify_pointer_axis(self, dx: float, dy: float, finish: bool = True) -> None: ...
     def notify_keyboard_keysym(self, keysym: int, pressed: bool) -> None: ...
 
 
@@ -278,8 +277,31 @@ def validate_keysym_sequence_safety(keysyms: list[int]) -> None:
         )
 
 
+def _pipe_to_clipboard_command(
+    cmd: list[str], encoded_data: bytes, timeout: float
+) -> None:
+    """Write UTF-8 bytes to a clipboard CLI helper without blocking on background forks."""
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.stdin is not None
+    proc.stdin.write(encoded_data)
+    proc.stdin.close()
+    ret = proc.wait(timeout=timeout)
+    if ret != 0:
+        stderr_out = (
+            proc.stderr.read().decode("utf-8", errors="replace").strip()
+            if proc.stderr
+            else ""
+        )
+        raise RuntimeError(f"{cmd[0]} exited with {ret}: {stderr_out}")
+
+
 def set_clipboard_text(text: str, timeout: float = 3.0) -> None:
-    """Copy text into the system clipboard using Gtk/Gdk, wl-copy, xclip, or xsel."""
+    """Copy text into the system clipboard using Gtk/Gdk, wl-copy, or xclip."""
     errors: list[str] = []
 
     # 1. Try PyGObject Gtk/Gdk clipboard directly
@@ -298,64 +320,17 @@ def set_clipboard_text(text: str, timeout: float = 3.0) -> None:
 
     encoded = text.encode("utf-8")
 
-    # 2. Try Wayland wl-copy CLI
-    if shutil.which("wl-copy"):
-        try:
-            # Note: wl-copy forks into the background to serve clipboard requests;
-            # closing stdout/stderr pipes prevents subprocess.run from hanging on child FDs.
-            proc = subprocess.Popen(
-                ["wl-copy"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            assert proc.stdin is not None
-            proc.stdin.write(encoded)
-            proc.stdin.close()
-            ret = proc.wait(timeout=timeout)
-            if ret == 0:
+    # 2. Try Wayland wl-copy or X11 xclip CLI helpers
+    for cmd in (["wl-copy"], ["xclip", "-selection", "clipboard", "-i"]):
+        if shutil.which(cmd[0]):
+            try:
+                _pipe_to_clipboard_command(cmd, encoded, timeout)
                 return
-            stderr_out = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
-            errors.append(f"wl-copy exited with {ret}: {stderr_out.strip()}")
-        except Exception as exc:
-            errors.append(f"wl-copy failed: {exc}")
-
-    # 3. Try X11 xclip CLI
-    if shutil.which("xclip"):
-        try:
-            proc = subprocess.Popen(
-                ["xclip", "-selection", "clipboard", "-i"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            assert proc.stdin is not None
-            proc.stdin.write(encoded)
-            proc.stdin.close()
-            ret = proc.wait(timeout=timeout)
-            if ret == 0:
-                return
-            errors.append(f"xclip exited with {ret}")
-        except Exception as exc:
-            errors.append(f"xclip failed: {exc}")
-
-    # 4. Try xsel CLI
-    if shutil.which("xsel"):
-        try:
-            subprocess.run(
-                ["xsel", "--clipboard", "--input"],
-                input=encoded,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=timeout,
-                check=True,
-            )
-            return
-        except Exception as exc:
-            errors.append(f"xsel failed: {exc}")
+            except Exception as exc:
+                errors.append(f"{cmd[0]} failed: {exc}")
 
     raise RuntimeError(
-        "Unable to set system clipboard (tried Gtk.Clipboard, wl-copy, xclip, xsel): "
+        "Unable to set system clipboard (tried Gtk.Clipboard, wl-copy, xclip): "
         + ("; ".join(errors) if errors else "no clipboard provider available.")
     )
 
@@ -404,6 +379,14 @@ class KeysymSynthesizer:
 
     # --- Pointer Actions ---
 
+    def _click_button_once(self, btn_code: int) -> None:
+        self._backend.notify_pointer_button(btn_code, True)
+        try:
+            if self._key_delay > 0:
+                time.sleep(self._key_delay)
+        finally:
+            self._backend.notify_pointer_button(btn_code, False)
+
     def move_cursor(
         self, x: float, y: float, width: int, height: int
     ) -> tuple[float, float]:
@@ -423,12 +406,7 @@ class KeysymSynthesizer:
         """Move to normalized (x, y) and perform a single mouse button click."""
         btn_code = resolve_button(button)
         px, py = self.move_cursor(x, y, width, height)
-        self._backend.notify_pointer_button(btn_code, True)
-        try:
-            if self._key_delay > 0:
-                time.sleep(self._key_delay)
-        finally:
-            self._backend.notify_pointer_button(btn_code, False)
+        self._click_button_once(btn_code)
         return px, py
 
     def double_click(
@@ -443,12 +421,7 @@ class KeysymSynthesizer:
         btn_code = resolve_button(button)
         px, py = self.move_cursor(x, y, width, height)
         for i in range(2):
-            self._backend.notify_pointer_button(btn_code, True)
-            try:
-                if self._key_delay > 0:
-                    time.sleep(self._key_delay)
-            finally:
-                self._backend.notify_pointer_button(btn_code, False)
+            self._click_button_once(btn_code)
             if i == 0 and self._key_delay > 0:
                 time.sleep(min(0.05, self._key_delay * 4))
         return px, py
@@ -551,20 +524,23 @@ class KeysymSynthesizer:
             for ch in text:
                 is_upper = ch.isupper()
                 if is_upper:
-                    self._backend.notify_keyboard_keysym(XK_SHIFT_L, True)
+                    self._press_key_raw(XK_SHIFT_L)
                 try:
                     sym = char_to_keysym(ch)
-                    self._backend.notify_keyboard_keysym(sym, True)
-                    if self._key_delay > 0:
-                        time.sleep(self._key_delay)
-                    self._backend.notify_keyboard_keysym(sym, False)
+                    self._press_key_raw(sym)
+                    try:
+                        if self._key_delay > 0:
+                            time.sleep(self._key_delay)
+                    finally:
+                        self._release_key_raw(sym)
                 finally:
-                    if is_upper:
-                        self._backend.notify_keyboard_keysym(XK_SHIFT_L, False)
+                    if is_upper and XK_SHIFT_L in self._active_modifiers:
+                        self._release_key_raw(XK_SHIFT_L)
                 count += 1
         finally:
             self.release_all_modifiers()
         return count
+
 
     def type_text_clipboard(self, text: str) -> None:
         """Inject text into the system clipboard and dispatch synthetic Ctrl+V (ADR 0002)."""

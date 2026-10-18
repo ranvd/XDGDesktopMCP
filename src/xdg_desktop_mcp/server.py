@@ -139,13 +139,14 @@ class DesktopController:
         return info
 
     async def get_dimensions(self) -> tuple[int, int]:
-        """Return (width, height) of the active Target Display."""
+        """Return current active (width, height) of the Target Display."""
         info = await self.ensure_session()
+        if self._stream is not None:
+            meta = self._stream.get_display_metadata()
+            return meta.width, meta.height
         if info.target_display.width and info.target_display.height:
             return info.target_display.width, info.target_display.height
-        assert self._stream is not None
-        meta = self._stream.get_display_metadata()
-        return meta.width, meta.height
+        raise StreamError("Unable to determine Target Display dimensions.")
 
     async def get_display_metadata(self) -> DisplayMetadata:
         """Return full DisplayMetadata for the active Target Display."""
