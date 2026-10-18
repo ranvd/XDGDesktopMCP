@@ -230,3 +230,40 @@ class TestKeysymSynthesizerAndSafety:
             ("key", ord("v"), False),
             ("key", XK_CONTROL_L, False),
         ]
+
+    def test_press_key_single_and_combo(self) -> None:
+        backend = FakeInputBackend()
+        synth = KeysymSynthesizer(backend, key_delay=0)
+
+        sym = synth.press_key("Return")
+        assert sym == 0xFF0D
+        assert backend.events == [
+            ("key", 0xFF0D, True),
+            ("key", 0xFF0D, False),
+        ]
+
+        backend.events.clear()
+        sym2 = synth.press_key("Ctrl+c")
+        assert sym2 == ord("c")
+        assert backend.events == [
+            ("key", XK_CONTROL_L, True),
+            ("key", ord("c"), True),
+            ("key", ord("c"), False),
+            ("key", XK_CONTROL_L, False),
+        ]
+
+    def test_type_text_keysyms_uppercase_shift(self) -> None:
+        backend = FakeInputBackend()
+        synth = KeysymSynthesizer(backend, key_delay=0)
+
+        count = synth.type_text_keysyms("Hi")
+        assert count == 2
+        assert backend.events == [
+            ("key", XK_SHIFT_L, True),
+            ("key", ord("H"), True),
+            ("key", ord("H"), False),
+            ("key", XK_SHIFT_L, False),
+            ("key", ord("i"), True),
+            ("key", ord("i"), False),
+        ]
+

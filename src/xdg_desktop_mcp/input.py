@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import logging
 import shutil
 import subprocess
@@ -278,10 +279,26 @@ def validate_keysym_sequence_safety(keysyms: list[int]) -> None:
 
 
 def set_clipboard_text(text: str, timeout: float = 3.0) -> None:
-    """Copy text into the system clipboard using wl-copy, xclip, or xsel."""
-    encoded = text.encode("utf-8")
+    """Copy text into the system clipboard using Gtk/Gdk, wl-copy, xclip, or xsel."""
     errors: list[str] = []
 
+    # 1. Try PyGObject Gtk/Gdk clipboard directly
+    try:
+        import gi
+
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gdk, Gtk
+
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(text, -1)
+        clipboard.store()
+        return
+    except Exception as exc:
+        errors.append(f"Gtk.Clipboard failed: {exc}")
+
+    encoded = text.encode("utf-8")
+
+    # 2. Try Wayland wl-copy CLI
     if shutil.which("wl-copy"):
         try:
             # Note: wl-copy forks into the background to serve clipboard requests;
@@ -303,6 +320,7 @@ def set_clipboard_text(text: str, timeout: float = 3.0) -> None:
         except Exception as exc:
             errors.append(f"wl-copy failed: {exc}")
 
+    # 3. Try X11 xclip CLI
     if shutil.which("xclip"):
         try:
             proc = subprocess.Popen(
@@ -321,6 +339,7 @@ def set_clipboard_text(text: str, timeout: float = 3.0) -> None:
         except Exception as exc:
             errors.append(f"xclip failed: {exc}")
 
+    # 4. Try xsel CLI
     if shutil.which("xsel"):
         try:
             subprocess.run(
@@ -336,8 +355,8 @@ def set_clipboard_text(text: str, timeout: float = 3.0) -> None:
             errors.append(f"xsel failed: {exc}")
 
     raise RuntimeError(
-        "Unable to set system clipboard (tried wl-copy, xclip, xsel): "
-        + ("; ".join(errors) if errors else "no clipboard utility found.")
+        "Unable to set system clipboard (tried Gtk.Clipboard, wl-copy, xclip, xsel): "
+        + ("; ".join(errors) if errors else "no clipboard provider available.")
     )
 
 
@@ -348,7 +367,7 @@ class KeysymSynthesizer:
         self,
         backend: InputBackend,
         key_delay: float = 0.008,
-        clipboard_setter: callable | None = None,
+        clipboard_setter: Callable[[str], None] | None = None,
     ) -> None:
         self._backend = backend
         self._key_delay = key_delay
@@ -497,20 +516,7 @@ class KeysymSynthesizer:
             return keysyms[-1]
 
         keysym = resolve_keysym(key)
-        validate_keysym_sequence_safety([keysym])
-        pressed_now: list[int] = []
-        try:
-            self._press_key_raw(keysym)
-            pressed_now.append(keysym)
-            if self._key_delay > 0:
-                time.sleep(self._key_delay)
-        finally:
-            for sym in reversed(pressed_now):
-                try:
-                    self._release_key_raw(sym)
-                except Exception:
-                    logger.exception("Error releasing keysym 0x%x", sym)
-            self.release_all_modifiers()
+        self.press_hotkey([key])
         return keysym
 
     def press_hotkey(self, keys: str | list[str] | tuple[str, ...]) -> list[int]:
@@ -523,12 +529,18 @@ class KeysymSynthesizer:
                 pressed_sequence.append(sym)
                 if self._key_delay > 0:
                     time.sleep(self._key_delay)
+            # Release keys in reverse order on normal completion
+            while pressed_sequence:
+                sym = pressed_sequence.pop()
+                self._release_key_raw(sym)
         finally:
-            for sym in reversed(pressed_sequence):
+            # Guarantee release of any keys still held if an error occurred
+            while pressed_sequence:
+                sym = pressed_sequence.pop()
                 try:
                     self._release_key_raw(sym)
                 except Exception:
-                    logger.exception("Error releasing keysym 0x%x in hotkey cleanup", sym)
+                    logger.exception("Error releasing keysym 0x%x in cleanup", sym)
             self.release_all_modifiers()
         return keysyms
 
@@ -537,13 +549,18 @@ class KeysymSynthesizer:
         count = 0
         try:
             for ch in text:
-                sym = char_to_keysym(ch)
-                self._backend.notify_keyboard_keysym(sym, True)
+                is_upper = ch.isupper()
+                if is_upper:
+                    self._backend.notify_keyboard_keysym(XK_SHIFT_L, True)
                 try:
+                    sym = char_to_keysym(ch)
+                    self._backend.notify_keyboard_keysym(sym, True)
                     if self._key_delay > 0:
                         time.sleep(self._key_delay)
-                finally:
                     self._backend.notify_keyboard_keysym(sym, False)
+                finally:
+                    if is_upper:
+                        self._backend.notify_keyboard_keysym(XK_SHIFT_L, False)
                 count += 1
         finally:
             self.release_all_modifiers()

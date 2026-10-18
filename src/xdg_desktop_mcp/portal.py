@@ -511,11 +511,7 @@ class PortalSession:
         ) -> None:
             logger.warning("Portal Session %s was closed by the compositor/user.", session_handle)
             self._cleanup_session_state(close_dbus=False)
-            for cb in list(self._on_closed_callbacks):
-                try:
-                    cb()
-                except Exception:
-                    logger.exception("Error in PortalSession on_closed callback")
+            self._dispatch_closed_callbacks()
 
         self._closed_sub_id = conn.signal_subscribe(
             PORTAL_BUS_NAME,
@@ -526,6 +522,14 @@ class PortalSession:
             Gio.DBusSignalFlags.NO_MATCH_RULE,
             _on_session_closed,
         )
+
+    def _dispatch_closed_callbacks(self) -> None:
+        """Invoke all registered on_closed callbacks safely."""
+        for cb in list(self._on_closed_callbacks):
+            try:
+                cb()
+            except Exception:
+                logger.exception("Error in PortalSession on_closed callback")
 
     def _cleanup_session_state(
         self, close_dbus: bool = False, session_handle: str | None = None
@@ -566,11 +570,7 @@ class PortalSession:
     def close(self) -> None:
         """Explicitly close the Portal Session and release its D-Bus handle and FD."""
         self._cleanup_session_state(close_dbus=True)
-        for cb in list(self._on_closed_callbacks):
-            try:
-                cb()
-            except Exception:
-                logger.exception("Error in PortalSession on_closed callback")
+        self._dispatch_closed_callbacks()
 
     # --- RemoteDesktop Input Notification Primitives ---
 

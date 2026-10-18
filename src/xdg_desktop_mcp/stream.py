@@ -126,7 +126,7 @@ def encode_sample(
     encoder_elem = (
         f"jpegenc quality={int(jpeg_quality)}"
         if normalized_fmt == "jpeg"
-        else "pngenc compression-level=6"
+        else "pngenc compression-level=0"
     )
     launch_str = (
         "appsrc name=src ! videoconvert ! videoscale ! "

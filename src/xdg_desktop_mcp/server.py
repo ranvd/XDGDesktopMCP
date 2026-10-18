@@ -26,50 +26,64 @@ from .stream import DisplayMetadata, ScreenCastStream, StreamError
 logger = logging.getLogger(__name__)
 
 
-def _parse_source_types(sources: str | int) -> int:
-    if isinstance(sources, int):
-        return sources
+def _parse_flags_from_string(
+    text: str,
+    token_map: dict[str, int],
+    default_mask: int,
+    entity_name: str,
+    valid_hint: str,
+) -> int:
     mask = 0
-    for part in sources.lower().replace("|", ",").split(","):
+    for part in text.lower().replace("|", ",").split(","):
         token = part.strip()
         if not token:
             continue
-        if token in ("monitor", "screen", "display"):
-            mask |= int(SourceType.MONITOR)
-        elif token == "window":
-            mask |= int(SourceType.WINDOW)
-        elif token == "virtual":
-            mask |= int(SourceType.VIRTUAL)
-        elif token == "all":
-            mask |= int(SourceType.MONITOR | SourceType.WINDOW)
+        if token in token_map:
+            mask |= token_map[token]
         else:
-            raise ValueError(
-                f"Unknown source type '{token}'. Valid values: 'monitor', 'window', 'virtual'."
-            )
-    return mask or int(SourceType.MONITOR | SourceType.WINDOW)
+            raise ValueError(f"Unknown {entity_name} '{token}'. Valid values: {valid_hint}.")
+    return mask or default_mask
+
+
+def _parse_source_types(sources: str | int) -> int:
+    if isinstance(sources, int):
+        return sources
+    source_map = {
+        "monitor": int(SourceType.MONITOR),
+        "screen": int(SourceType.MONITOR),
+        "display": int(SourceType.MONITOR),
+        "window": int(SourceType.WINDOW),
+        "virtual": int(SourceType.VIRTUAL),
+        "all": int(SourceType.MONITOR | SourceType.WINDOW),
+    }
+    return _parse_flags_from_string(
+        sources,
+        source_map,
+        int(SourceType.MONITOR | SourceType.WINDOW),
+        "source type",
+        "'monitor', 'window', 'virtual'",
+    )
 
 
 def _parse_device_types(devices: str | int) -> int:
     if isinstance(devices, int):
         return devices
-    mask = 0
-    for part in devices.lower().replace("|", ",").split(","):
-        token = part.strip()
-        if not token:
-            continue
-        if token in ("keyboard", "keys"):
-            mask |= int(DeviceType.KEYBOARD)
-        elif token in ("pointer", "mouse"):
-            mask |= int(DeviceType.POINTER)
-        elif token in ("touchscreen", "touch"):
-            mask |= int(DeviceType.TOUCHSCREEN)
-        elif token == "all":
-            mask |= int(DeviceType.KEYBOARD | DeviceType.POINTER | DeviceType.TOUCHSCREEN)
-        else:
-            raise ValueError(
-                f"Unknown device type '{token}'. Valid values: 'keyboard', 'pointer', 'touchscreen'."
-            )
-    return mask or int(DeviceType.KEYBOARD | DeviceType.POINTER)
+    device_map = {
+        "keyboard": int(DeviceType.KEYBOARD),
+        "keys": int(DeviceType.KEYBOARD),
+        "pointer": int(DeviceType.POINTER),
+        "mouse": int(DeviceType.POINTER),
+        "touchscreen": int(DeviceType.TOUCHSCREEN),
+        "touch": int(DeviceType.TOUCHSCREEN),
+        "all": int(DeviceType.KEYBOARD | DeviceType.POINTER | DeviceType.TOUCHSCREEN),
+    }
+    return _parse_flags_from_string(
+        devices,
+        device_map,
+        int(DeviceType.KEYBOARD | DeviceType.POINTER),
+        "device type",
+        "'keyboard', 'pointer', 'touchscreen'",
+    )
 
 
 class DesktopController:
@@ -176,10 +190,10 @@ async def start_session(
         }
     except PortalRejectedError as exc:
         raise RuntimeError(
-            f"Desktop session authorization was denied by the user: {exc}"
+            f"Portal Session authorization was denied by the user: {exc}"
         ) from exc
     except (PortalError, StreamError) as exc:
-        raise RuntimeError(f"Failed to start desktop session: {exc}") from exc
+        raise RuntimeError(f"Failed to start Portal Session: {exc}") from exc
 
 
 @mcp.tool(structured_output=False)
